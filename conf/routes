@@ -5,5 +5,7 @@
 #route for oauth token
 POST    /oauth/access_token         controllers.OAuthController.accessToken
 
+POST    /oauth/authorize            controllers.OAuthController.authorizationCode
+
 #authorized route
 GET     /resources                  controllers.OAuthController.resources

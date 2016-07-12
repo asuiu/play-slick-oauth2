@@ -3,12 +3,12 @@ package controllers
 import com.google.inject.Inject
 import models.daos.{AccountsDAO, OauthAccessTokensDAO, OauthAuthorizationCodesDAO, OauthClientsDAO}
 import models.entities.{Account, OauthAccessToken}
-import play.api.libs.json.{Json, Writes}
+import play.api.libs.json.{JsString, JsValue, Json, Writes}
 import play.api.mvc.{Action, Controller}
-
 import scala.concurrent.Future
 import scalaoauth2.provider._
 import scalaoauth2.provider.OAuth2ProviderActionBuilders._
+
 
 class OAuthController  @Inject()(accountsDAO : AccountsDAO,
                                  oauthAuthorizationCodesDAO : OauthAuthorizationCodesDAO,
@@ -42,6 +42,37 @@ class OAuthController  @Inject()(accountsDAO : AccountsDAO,
 
   def resources = AuthorizedAction(new MyDataHandler()) { request =>
     Ok(Json.toJson(request.authInfo))
+  }
+
+  def authorizationCode = Action.async(parse.json){ implicit request =>
+    val futureResult: Future[Either[OAuthError, String]] =
+      accountsDAO.authenticate(
+        (request.body\"username").asOpt[String].getOrElse(""),
+        (request.body\"password").asOpt[String].getOrElse("")).flatMap {
+        accountMaybe =>
+          accountMaybe match {
+            case Some(account) =>
+              val clientFuture = oauthClientsDAO.findByClientId((request.body\"client").asOpt[String].getOrElse(""))
+              clientFuture.flatMap { clientMaybe =>
+                clientMaybe match {
+                  case Some(client) =>
+                    val futureCode = oauthAuthorizationCodesDAO.createCode(account.id, client.id, client.redirectUri)
+                    futureCode.map(oauthCode => Right(oauthCode.code))
+                  case None => Future.successful(Left(new InvalidClient("Invalid client is detected")))
+                }
+              }
+            case None =>
+              Future.successful(Left(new AccessDenied("Invalid username or password")))
+          }
+    }
+
+    futureResult.map { result =>
+      result match {
+        case Left(e) => new Status(e.statusCode)(responseOAuthErrorJson(e)).withHeaders(responseOAuthErrorHeader(e))
+        case Right(value) =>
+          Ok(Json.toJson(Map[String, JsValue]("authorization_code" -> JsString(value)))).withHeaders("Cache-Control" -> "no-store", "Pragma" -> "no-cache")
+      }
+    }
   }
 
   class MyDataHandler extends DataHandler[Account] {
